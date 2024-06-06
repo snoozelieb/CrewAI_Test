@@ -1,135 +1,210 @@
-from crewai import Agent, Task, Crew
 import os
+from crewai import Agent, Task, Crew, Process
+from crewai_tools import SerperDevTool, FileReadTool, ScrapeWebsiteTool
+from utils import get_openai_api_key, get_serper_api_key, pretty_print_result
+import matplotlib.pyplot as plt
 
-from rich.markdown import Markdown
-from utils import get_openai_api_key
+# Set environment variables for API keys using utility functions
+os.environ["SERPER_API_KEY"] = get_serper_api_key()
+os.environ["OPENAI_API_KEY"] = get_openai_api_key()
 
-# Warning control
-import warnings
+# Create the tools
+scrape_tool = ScrapeWebsiteTool()
+search_tool = SerperDevTool()
+file_read_tool = FileReadTool()
 
-warnings.filterwarnings('ignore')
-
-openai_api_key = get_openai_api_key()
-os.environ["OPENAI_MODEL_NAME"] = 'gpt-4o'
-
-planner = Agent(
-    role="Content Planner",
-    goal="Plan engaging and factually accurate content on {topic}",
-    backstory="You're working on planning a thought laedership piece "
-              "about the topic: {topic}."
-              "You collect information that helps the "
-              "audience learn something "
-              "and make informed decisions. "
-              "Your work is the basis for "
-              "the Content Writer to write an article on this topic.",
-    allow_delegation=False,
-    verbose=True
+# Define the Fetch Companies Task
+fetch_companies_task = Task(
+    description="Fetch the list of insurers from the provided URL.",
+    expected_output="A list of insurer names and details from the URL.",
+    tools=[scrape_tool],
+    input_data={'url': 'https://www.resbank.co.za/en/home/what-we-do/Prudentialregulation/insurers-list'},
+    agent=None  # No specific agent needed for this initial task
 )
 
-Online_Researher = Agent(
-    role="Online Researh Agent",
-    goal="Research and browse the web for factually accurate content on {topic}",
-    backstory="You're collecting information for a thought laedership piece "
-              "about the topic: {topic}."
-              "You collect information that helps the "
-              "audience learn something "
-              "and make informed decisions. "
-              "Your work is the basis for "
-              "the Content Writer to write an article on this topic.",
-    allow_delegation=False,
-    verbose=True
+# Define the Researcher Agents
+researcher_general = Agent(
+    role='General Researcher',
+    goal='Gather broad information on each company to understand what data is available.',
+    verbose=True,
+    memory=True,
+    backstory="You are a skilled researcher adept at finding detailed information on any topic.",
+    tools=[search_tool],
+    allow_delegation=True
 )
 
+researcher_pricing = Agent(
+    role='Pricing Researcher',
+    goal='Gather detailed pricing information for each company’s funeral products.',
+    verbose=True,
+    memory=True,
+    backstory="You are an expert in extracting detailed pricing information.",
+    tools=[search_tool],
+    allow_delegation=True
+)
+
+researcher_coverage = Agent(
+    role='Coverage Researcher',
+    goal='Gather detailed coverage information for each company’s funeral products.',
+    verbose=True,
+    memory=True,
+    backstory="You are an expert in extracting detailed coverage information.",
+    tools=[search_tool],
+    allow_delegation=True
+)
+
+researcher_reviews = Agent(
+    role='Customer Reviews Researcher',
+    goal='Gather customer reviews and feedback for each company’s funeral products.',
+    verbose=True,
+    memory=True,
+    backstory="You are skilled at finding and analyzing customer reviews and feedback.",
+    tools=[search_tool],
+    allow_delegation=True
+)
+
+# Define the Analyst Agent
+analyst = Agent(
+    role='Analyst',
+    goal='Review and collate the initial broad research data to determine specific data requirements.',
+    verbose=True,
+    memory=True,
+    backstory="You are an expert in data analysis and can identify key data points from raw information.",
+    tools=[file_read_tool],
+    allow_delegation=False
+)
+
+# Define the Spec Writer Agent
+spec_writer = Agent(
+    role='Spec Writer',
+    goal='Write detailed specifications for the additional data search based on the analyst’s findings.',
+    verbose=True,
+    memory=True,
+    backstory="You are a proficient writer skilled in drafting detailed research specifications.",
+    tools=[],
+    allow_delegation=False
+)
+
+# Define the Data Analyst Agent
+data_analyst = Agent(
+    role='Data Analyst',
+    goal='Process and analyze the collected data to extract meaningful insights.',
+    verbose=True,
+    memory=True,
+    backstory="You are an expert in data processing and analysis.",
+    tools=[],
+    allow_delegation=False
+)
+
+# Define the Writer Agent
 writer = Agent(
-    role="Content Writer",
-    goal="Write insightful and factually accurate "
-         "opinion piece about the topic: {topic}",
-    backstory="You're working on a writing "
-              "a new opinion piece about the topic: {topic}. "
-              "You base your writing on the work of "
-              "the Content Planner, who provides an outline "
-              "and relevant context about the topic. "
-              "You follow the main objectives and "
-              "direction of the outline, "
-              "as provide by the Content Planner and and the Online Researh Agent . "
-              "You also provide objective and impartial insights "
-              "and back them up with information "
-              "provide by the Content Planner. "
-              "You acknowledge in your opinion piece "
-              "when your statements are opinions "
-              "as opposed to objective statements.",
-    allow_delegation=False,
-    verbose=True
+    role='Writer',
+    goal='Summarize the research findings and present them in a well-structured report with visualizations.',
+    verbose=True,
+    memory=True,
+    backstory="You have a knack for writing clear and concise reports based on detailed research.",
+    tools=[],
+    allow_delegation=False
 )
 
-editor = Agent(
-    role="Editor",
-    goal="Edit a given thought leadership to align with "
-         "the writing style of the organization. ",
-    backstory="You are an editor who receives a blog post "
-              "from the Content Writer. "
-              "Your goal is to review the thought leadership piece"
-              "to ensure that it follows journalistic best practices,"
-              "provides balanced viewpoints "
-              "when providing opinions or assertions, "
-              "and also avoids major controversial topics "
-              "or opinions when possible.",
-    allow_delegation=False,
-    verbose=True
+# Define the Initial Research Task
+initial_research_task = Task(
+    description="Conduct initial broad research on each insurer to gather a wide range of information.",
+    expected_output="A collection of broad data on each insurer.",
+    tools=[search_tool],
+    agent=researcher_general,
 )
 
-plan = Task(
-    description=(
-        "1. Prioritize the latest trends, key players, "
-            "and noteworthy news on {topic}.\n"
-        "2. Identify the target audience, considering "
-            "their interests and pain points.\n"
-        "3. Develop a detailed content outline including "
-            "an introduction, key points, and a call to action.\n"
-        "4. Include SEO keywords and relevant data or sources."
-    ),
-    expected_output="A comprehensive content plan document "
-        "with an outline, audience analysis, "
-        "SEO keywords, and resources.",
-    agent=planner,
+# Define the Review Task
+review_task = Task(
+    description="Analyze the initial broad research data to determine specific details to collect in the next phase.",
+    expected_output="A detailed plan for specific data collection.",
+    tools=[file_read_tool],
+    agent=analyst  # Analyst Agent reviews the data
 )
 
-write = Task(
-    description=(
-        "1. Use the content plan to craft a compelling "
-            "blog post on {topic}.\n"
-        "2. Incorporate SEO keywords naturally.\n"
-		"3. Sections/Subtitles are properly named "
-            "in an engaging manner.\n"
-        "4. Ensure the post is structured with an "
-            "engaging introduction, insightful body, "
-            "and a summarizing conclusion.\n"
-        "5. Proofread for grammatical errors and "
-            "alignment with the brand's voice.\n"
-    ),
-    expected_output="A well-written thought leadership piece "
-        "in markdown format, ready for publication, "
-        "each section should have 2 or 3 paragraphs.",
+# Define the Spec Writing Task
+spec_writing_task = Task(
+    description="Write detailed specifications for the additional data search based on the analyst’s findings.",
+    expected_output="A detailed specification document for further research.",
+    tools=[],
+    agent=spec_writer  # Spec Writer Agent drafts the specifications
+)
+
+# Define the Specialized Research Tasks
+research_pricing_task = Task(
+    description="Gather detailed pricing information for each company’s funeral products.",
+    expected_output="Detailed pricing information for each insurer.",
+    tools=[search_tool],
+    agent=researcher_pricing,
+)
+
+research_coverage_task = Task(
+    description="Gather detailed coverage information for each company’s funeral products.",
+    expected_output="Detailed coverage information for each insurer.",
+    tools=[search_tool],
+    agent=researcher_coverage,
+)
+
+research_reviews_task = Task(
+    description="Gather customer reviews and feedback for each company’s funeral products.",
+    expected_output="Customer reviews and feedback for each insurer.",
+    tools=[search_tool],
+    agent=researcher_reviews,
+)
+
+# Define the Data Analysis Task
+data_analysis_task = Task(
+    description="Process and analyze the collected data to extract meaningful insights.",
+    expected_output="Analyzed data with insights on funeral products.",
+    tools=[],
+    agent=data_analyst,
+)
+
+# Define the Writing Task
+write_task = Task(
+    description="Summarize the refined research findings and present them in a detailed report with visualizations.",
+    expected_output="A comprehensive report on funeral products with visualizations.",
+    tools=[],
     agent=writer,
+    async_execution=False
 )
 
-edit = Task(
-    description=("Proofread the given thought leadership piece for "
-                 "grammatical errors and "
-                 "alignment with the brand's voice."),
-    expected_output="A well-written blog post in markdown format, "
-                    "ready for publication, "
-                    "each section should have 2 or 3 paragraphs.",
-    agent=editor
-)
-
+# Form the Crew
 crew = Crew(
-    agents=[planner, writer, editor],
-    tasks=[plan, write, edit],
-    verbose=2
+    agents=[researcher_general, researcher_pricing, researcher_coverage, researcher_reviews, analyst, spec_writer,
+            data_analyst, writer],
+    tasks=[fetch_companies_task, initial_research_task, review_task, spec_writing_task, research_pricing_task,
+           research_coverage_task, research_reviews_task, data_analysis_task, write_task],
+    process=Process.sequential  # Sequential task execution
 )
 
-topic = "AI application in Insurance"
-result = crew.kickoff(inputs={"topic": topic})
-Markdown(result)
+# Kickoff the process
+result = crew.kickoff(inputs={'url': 'https://www.resbank.co.za/en/home/what-we-do/Prudentialregulation/insurers-list'})
+formatted_result = pretty_print_result(result)
+print(formatted_result)
 
+
+# Additional utility to save the report to a file
+def save_report(report, filename='funeral_products_report.md'):
+    with open(filename, 'w') as file:
+        file.write(report)
+
+
+# Save the result to a file
+save_report(formatted_result)
+
+
+# Visualization example
+def create_visualization(data, filename='visualization.png'):
+    # Placeholder for actual data visualization logic
+    plt.figure(figsize=(10, 6))
+    plt.plot(data)  # Replace with actual data
+    plt.title('Example Visualization')
+    plt.xlabel('X-axis')
+    plt.ylabel('Y-axis')
+    plt.savefig(filename)
+
+
+# Create a sample visualization (replace with actual data)
+create_visualization([1, 2, 3, 4, 5])
